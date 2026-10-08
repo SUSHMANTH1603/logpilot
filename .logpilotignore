@@ -1,0 +1,153 @@
+# =============================================================================
+# .logpilotignore
+# =============================================================================
+#
+# This file specifies paths and patterns that the LogPilot repository
+# intelligence system must exclude from scanning, indexing, and LLM context
+# construction.
+#
+# Purpose:
+#   - Prevent secrets, credentials, and sensitive material from being
+#     ingested into the intelligence pipeline or sent to LLM providers.
+#   - Exclude large/binary/generated directories that provide no analytical
+#     value and waste compute.
+#
+# Syntax:
+#   - Follows .gitignore pattern syntax.
+#   - Lines starting with # are comments.
+#   - Blank lines are ignored.
+#   - Patterns are matched relative to the repository root.
+#
+# Security note:
+#   This file is a defense-in-depth measure. The repository intelligence
+#   system must ALSO apply built-in secret detection and redaction
+#   regardless of this file's contents.
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Secrets and credentials
+# -----------------------------------------------------------------------------
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+credentials*
+secrets*
+**/secret/**
+**/secrets/**
+**/credentials/**
+*.keystore
+*.truststore
+id_rsa*
+id_ed25519*
+*.gpg
+
+# -----------------------------------------------------------------------------
+# Version control internals
+# -----------------------------------------------------------------------------
+.git/
+
+# -----------------------------------------------------------------------------
+# Dependencies / vendor
+# -----------------------------------------------------------------------------
+node_modules/
+.venv/
+venv/
+env/
+vendor/
+bower_components/
+
+# -----------------------------------------------------------------------------
+# Build outputs
+# -----------------------------------------------------------------------------
+dist/
+build/
+out/
+target/
+*.vsix
+__pycache__/
+*.pyc
+
+# -----------------------------------------------------------------------------
+# Large / binary assets
+# -----------------------------------------------------------------------------
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.joblib
+*.model
+*.pt
+*.pth
+*.onnx
+*.bin
+*.zip
+*.tar.gz
+*.tar
+*.gz
+*.rar
+*.7z
+*.iso
+*.dmg
+*.exe
+*.dll
+*.so
+*.dylib
+*.wasm
+
+# -----------------------------------------------------------------------------
+# Data directories
+# -----------------------------------------------------------------------------
+datasets/raw/
+datasets/processed/
+mlruns/
+mlartifacts/
+
+# -----------------------------------------------------------------------------
+# Media
+# -----------------------------------------------------------------------------
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.mp4
+*.mp3
+*.wav
+*.webm
+*.webp
+
+# -----------------------------------------------------------------------------
+# IDE / Editor
+# -----------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# -----------------------------------------------------------------------------
+# OS
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+
+# -----------------------------------------------------------------------------
+# Logs
+# -----------------------------------------------------------------------------
+*.log
+logs/
+
+# -----------------------------------------------------------------------------
+# Lock files (large, low analytical value)
+# -----------------------------------------------------------------------------
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+poetry.lock
+Pipfile.lock

@@ -24,6 +24,16 @@ class AppError(Exception):
         self.details = details or []
 
 
+class BadRequestError(AppError):
+    def __init__(
+        self,
+        message: str = "Bad request.",
+        code: str = "BAD_REQUEST",
+        details: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(message=message, code=code, status_code=400, details=details)
+
+
 class NotFoundError(AppError):
     def __init__(
         self,

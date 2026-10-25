@@ -19,3 +19,13 @@ class Base(DeclarativeBase):
     """Base declarative class for all LogPilot relational models."""
 
     metadata = metadata
+
+
+# Register domain models on metadata
+from logpilot_api.modules.ingestion.models import (  # noqa: F401, E402
+    IngestionRun,
+    LogEvent,
+    LogSource,
+    LogTemplate,
+)
+from logpilot_api.modules.projects.models import Project  # noqa: F401, E402

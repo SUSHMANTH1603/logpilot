@@ -25,16 +25,33 @@ def get_async_engine() -> AsyncEngine:
     if _engine is None:
         settings = get_settings()
         connect_args = {}
+        extra_kwargs = {}
         # If SQLite is used for unit tests
         if "sqlite" in settings.database_url:
+            from sqlalchemy.pool import StaticPool
+
             connect_args["check_same_thread"] = False
+            extra_kwargs["poolclass"] = StaticPool
 
         _engine = create_async_engine(
             settings.database_url,
             echo=settings.debug,
             future=True,
             connect_args=connect_args,
+            **extra_kwargs,
         )
+
+        if "sqlite" in settings.database_url:
+            from typing import Any
+
+            from sqlalchemy import event
+
+            @event.listens_for(_engine.sync_engine, "connect")
+            def _set_sqlite_pragma(dbapi_connection: Any, _connection_record: Any) -> None:
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
+
     return _engine
 
 

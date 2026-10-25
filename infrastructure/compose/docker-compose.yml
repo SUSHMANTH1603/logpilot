@@ -1,0 +1,86 @@
+# ==============================================================================
+# LogPilot Local Development Infrastructure (Docker Compose)
+# ==============================================================================
+# Storage Architecture aligned with ADR-005:
+#   - PostgreSQL 16 (System of Record - Authoritative Source of Truth)
+#   - Redis 7 (Infrastructure Layer - Task Queue & Ephemeral Cache)
+#   - Qdrant v1.11 (Derived Semantic Retrieval Index - Rebuildable)
+#
+# Security: Services are bound to 127.0.0.1 to prevent external exposure.
+# ==============================================================================
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    container_name: logpilot-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-logpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-logpilot_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-logpilot}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-logpilot} -d ${POSTGRES_DB:-logpilot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - logpilot-net
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: logpilot-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - logpilot-net
+
+  qdrant:
+    image: qdrant/qdrant:v1.11.3
+    container_name: logpilot-qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__LOG_LEVEL: INFO
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:6333/readyz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - logpilot-net
+
+volumes:
+  postgres_data:
+    name: logpilot-postgres-data
+  redis_data:
+    name: logpilot-redis-data
+  qdrant_data:
+    name: logpilot-qdrant-data
+
+networks:
+  logpilot-net:
+    name: logpilot-local-network
+    driver: bridge

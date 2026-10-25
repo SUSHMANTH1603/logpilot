@@ -14,11 +14,14 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.exc import IntegrityError
 
+from logpilot_api.core.security import create_access_token
 from logpilot_api.db import session as db_session
+from logpilot_api.modules.identity.repository import UserRepository
 from logpilot_api.modules.ingestion.models import LogEvent, LogSource, LogTemplate
 from logpilot_api.modules.ingestion.schemas import LogSourceCreate
 from logpilot_api.modules.ingestion.service import IngestionService
 from logpilot_api.modules.projects.models import Project
+from logpilot_api.modules.projects.repository import ProjectMembershipRepository
 from logpilot_api.modules.projects.schemas import ProjectCreate
 
 
@@ -178,7 +181,7 @@ async def test_bearer_authentication_edge_cases_prevent_false_security(
     )
     assert res_arbitrary.status_code == 401
     assert res_arbitrary.json()["error"]["code"] == "UNAUTHORIZED"
-    assert "Identity module" in res_arbitrary.json()["error"]["message"]
+    assert "token" in res_arbitrary.json()["error"]["message"].lower()
 
     # Case 4: Log source administrative routes reject arbitrary tokens -> 401
     res_src = await client.post(
@@ -245,6 +248,39 @@ async def test_telemetry_ingestion_credential_validation(client: AsyncClient) ->
         headers={"X-LogPilot-Source-Key": valid_key},
     )
     assert res_valid.status_code == 202
+
+    # Valid human Bearer token belonging to non-member -> 404 RESOURCE_NOT_FOUND (tenant isolation)
+    async with sessionmaker() as session:
+        user_repo = UserRepository(session)
+        non_member = await user_repo.create("nonmember.ingest@test.com", "hash", "Non Member")
+        member_eng = await user_repo.create("engineer.ingest@test.com", "hash", "Eng Member")
+        await session.commit()
+        non_member_id = non_member.id
+        member_eng_id = member_eng.id
+
+    async with sessionmaker() as session:
+        member_repo = ProjectMembershipRepository(session)
+        await member_repo.create_membership(pid, member_eng_id, "ENGINEER")
+        await session.commit()
+
+    non_member_token = create_access_token(non_member_id, "nonmember.ingest@test.com")
+    member_eng_token = create_access_token(member_eng_id, "engineer.ingest@test.com")
+
+    res_non_member = await client.post(
+        f"/api/v1/projects/{pid}/log-sources/{sid}/ingest",
+        json=batch,
+        headers={"Authorization": f"Bearer {non_member_token}"},
+    )
+    assert res_non_member.status_code == 404
+    assert res_non_member.json()["error"]["code"] == "RESOURCE_NOT_FOUND"
+
+    # Valid human Bearer token belonging to member with ENGINEER role -> 202 Accepted
+    res_eng = await client.post(
+        f"/api/v1/projects/{pid}/log-sources/{sid}/ingest",
+        json=batch,
+        headers={"Authorization": f"Bearer {member_eng_token}"},
+    )
+    assert res_eng.status_code == 202
 
 
 async def test_empty_and_malformed_payload_validation(client: AsyncClient) -> None:

@@ -12,10 +12,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from logpilot_api.core.errors import (
     BadRequestError,
     ConflictError,
+    ForbiddenError,
     NotFoundError,
     UnauthorizedError,
 )
-from logpilot_api.core.security import generate_source_key, hash_source_key, verify_source_key
+from logpilot_api.core.security import (
+    decode_access_token,
+    generate_source_key,
+    hash_source_key,
+    verify_source_key,
+)
+from logpilot_api.modules.identity.repository import UserRepository
 from logpilot_api.modules.ingestion.models import IngestionRun, LogEvent, LogSource
 from logpilot_api.modules.ingestion.normalizer import (
     compute_event_hash,
@@ -26,7 +33,7 @@ from logpilot_api.modules.ingestion.normalizer import (
 )
 from logpilot_api.modules.ingestion.repository import IngestionRepository
 from logpilot_api.modules.ingestion.schemas import LogIngestRequest, LogSourceCreate
-from logpilot_api.modules.projects.repository import ProjectRepository
+from logpilot_api.modules.projects.repository import ProjectMembershipRepository, ProjectRepository
 
 
 class IngestionService:
@@ -76,7 +83,7 @@ class IngestionService:
             raise NotFoundError(f"Project '{project_id}' not found.")
         return await self.ingestion_repo.list_log_sources(project_id)
 
-    def verify_credentials(
+    async def verify_credentials(
         self,
         log_source: LogSource,
         source_key: str | None,
@@ -91,13 +98,35 @@ class IngestionService:
             return
 
         if bearer_token:
-            # User bearer authentication requires validating token signatures, resolving User
-            # identity, and verifying ProjectMembership (D05 § 8.1, D06 § 7.4). Since the Identity
-            # module is not implemented, arbitrary tokens cannot be authenticated.
-            raise UnauthorizedError(
-                "User bearer authentication for ingestion requires the Identity module "
-                "(D05 § 8.1 / § 8.3). Use 'X-LogPilot-Source-Key' for telemetry ingestion."
-            )
+            parts = bearer_token.strip().split()
+            if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+                raise UnauthorizedError("Invalid authorization format. Expected 'Bearer <token>'.")
+
+            payload = decode_access_token(parts[1].strip())
+            try:
+                user_id = uuid.UUID(payload["sub"])
+            except (ValueError, KeyError) as exc:
+                raise UnauthorizedError(
+                    "Invalid subject identifier in authentication token."
+                ) from exc
+
+            user_repo = UserRepository(self.session)
+            user = await user_repo.get_by_id(user_id)
+            if not user or not user.is_active:
+                raise UnauthorizedError("User account not found or inactive.")
+
+            membership_repo = ProjectMembershipRepository(self.session)
+            membership = await membership_repo.get_membership(log_source.project_id, user.id)
+            if not membership:
+                raise NotFoundError(
+                    "Log source not found or does not belong to specified project.",
+                    code="RESOURCE_NOT_FOUND",
+                )
+
+            if membership.role == "VIEWER":
+                raise ForbiddenError("VIEWER role cannot ingest telemetry.")
+
+            return
 
         raise UnauthorizedError(
             "Authentication required. Provide 'X-LogPilot-Source-Key' or 'Authorization: Bearer'."
@@ -120,7 +149,7 @@ class IngestionService:
             raise BadRequestError(f"Log source '{source.name}' is currently deactivated.")
 
         # Authenticate telemetry emitter
-        self.verify_credentials(source, source_key=source_key, bearer_token=bearer_token)
+        await self.verify_credentials(source, source_key=source_key, bearer_token=bearer_token)
 
         if not payload.events:
             raise BadRequestError("Event batch cannot be empty.")

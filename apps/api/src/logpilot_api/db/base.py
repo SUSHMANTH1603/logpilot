@@ -22,10 +22,11 @@ class Base(DeclarativeBase):
 
 
 # Register domain models on metadata
+from logpilot_api.modules.identity.models import User  # noqa: F401, E402
 from logpilot_api.modules.ingestion.models import (  # noqa: F401, E402
     IngestionRun,
     LogEvent,
     LogSource,
     LogTemplate,
 )
-from logpilot_api.modules.projects.models import Project  # noqa: F401, E402
+from logpilot_api.modules.projects.models import Project, ProjectMembership  # noqa: F401, E402

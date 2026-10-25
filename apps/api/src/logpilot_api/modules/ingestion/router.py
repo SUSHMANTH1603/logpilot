@@ -5,7 +5,11 @@ import uuid
 from fastapi import APIRouter, Depends, Header, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from logpilot_api.api.deps import get_session, verify_bearer_token
+from logpilot_api.api.deps import (
+    get_session,
+    require_project_engineer,
+    require_project_member,
+)
 from logpilot_api.modules.ingestion.schemas import (
     IngestionRunResponse,
     LogIngestRequest,
@@ -14,6 +18,7 @@ from logpilot_api.modules.ingestion.schemas import (
     LogSourceResponse,
 )
 from logpilot_api.modules.ingestion.service import IngestionService
+from logpilot_api.modules.projects.models import ProjectMembership
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["Log Ingestion"])
 
@@ -27,10 +32,10 @@ router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["Log Ingestion"
 async def register_log_source(
     project_id: uuid.UUID,
     payload: LogSourceCreate,
-    _token: str = Depends(verify_bearer_token),
+    _membership: ProjectMembership = Depends(require_project_engineer),
     session: AsyncSession = Depends(get_session),
 ) -> LogSourceResponse:
-    """Register a new log source and issue an ingestion key (D06 § 7.4)."""
+    """Register a new log source, strictly requiring ENGINEER or OWNER permissions (D06 § 7.4)."""
     service = IngestionService(session)
     source, plain_key = await service.register_log_source(project_id, payload)
     resp = LogSourceResponse.model_validate(source)
@@ -45,7 +50,7 @@ async def register_log_source(
 )
 async def list_log_sources(
     project_id: uuid.UUID,
-    _token: str = Depends(verify_bearer_token),
+    _membership: ProjectMembership = Depends(require_project_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[LogSourceResponse]:
     """List all log sources scoped strictly to the specified project (D06 § 7.4)."""
@@ -62,10 +67,10 @@ async def list_log_sources(
 async def get_log_source(
     project_id: uuid.UUID,
     log_source_id: uuid.UUID,
-    _token: str = Depends(verify_bearer_token),
+    _membership: ProjectMembership = Depends(require_project_member),
     session: AsyncSession = Depends(get_session),
 ) -> LogSourceResponse:
-    """Retrieve details for a specific log source (D06 § 7.4)."""
+    """Retrieve details for a specific log source with project authorization (D06 § 7.4)."""
     service = IngestionService(session)
     source = await service.get_log_source(project_id, log_source_id)
     return LogSourceResponse.model_validate(source)
@@ -110,7 +115,7 @@ async def ingest_logs(
 async def get_ingestion_run(
     project_id: uuid.UUID,
     ingestion_run_id: uuid.UUID,
-    _token: str = Depends(verify_bearer_token),
+    _membership: ProjectMembership = Depends(require_project_member),
     session: AsyncSession = Depends(get_session),
 ) -> IngestionRunResponse:
     """Retrieve status, events_processed, and error metrics for an ingestion run (D06 § 7.4)."""

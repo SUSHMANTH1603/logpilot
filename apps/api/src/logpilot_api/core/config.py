@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +32,21 @@ class Settings(BaseSettings):
     secret_key: str = Field(
         default="dev-insecure-secret-key-change-in-production-min-32-chars",
         description="Application secret key for cryptographic operations",
+    )
+    jwt_secret_key: str | None = Field(
+        default=None,
+        description=(
+            "Dedicated secret key for signing user JWT tokens (never reused from secret_key). "
+            "For production deployments, generate a high-entropy key with 'openssl rand -hex 32'."
+        ),
+    )
+    jwt_algorithm: str = Field(
+        default="HS256",
+        description="Cryptographic algorithm for JWT signing (fixed HS256 allowlist)",
+    )
+    access_token_expire_minutes: int = Field(
+        default=1440,
+        description="Access token validity lifetime in minutes (default: 24 hours / 1440 minutes)",
     )
 
     # PostgreSQL System of Record (ADR-005)
@@ -93,6 +108,33 @@ class Settings(BaseSettings):
         if not (1 <= v <= 65535):
             raise ValueError("api_port must be between 1 and 65535")
         return v
+
+    @model_validator(mode="after")
+    def validate_jwt_configuration(self) -> "Settings":
+        if self.jwt_algorithm != "HS256":
+            raise ValueError(f"jwt_algorithm must be 'HS256', got '{self.jwt_algorithm}'")
+
+        dev_default = "dev-insecure-jwt-secret-key-change-in-production-min-32-chars"
+        if not self.jwt_secret_key or not self.jwt_secret_key.strip():
+            if self.is_production:
+                raise ValueError("JWT_SECRET_KEY is mandatory and cannot be empty in production.")
+            self.jwt_secret_key = dev_default
+
+        if self.jwt_secret_key == self.secret_key:
+            raise ValueError(
+                "JWT_SECRET_KEY must not reuse or fall back to the generic application secret_key."
+            )
+
+        if self.is_production:
+            if len(self.jwt_secret_key) < 32:
+                raise ValueError(
+                    "JWT_SECRET_KEY must be at least 32 characters long in production. "
+                    "Generate a cryptographically secure key using 'openssl rand -hex 32'."
+                )
+            if self.jwt_secret_key == dev_default:
+                raise ValueError("Insecure default JWT_SECRET_KEY cannot be used in production.")
+
+        return self
 
     @property
     def is_production(self) -> bool:

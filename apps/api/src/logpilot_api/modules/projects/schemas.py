@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ProjectCreate(BaseModel):
@@ -27,3 +27,37 @@ class ProjectResponse(BaseModel):
     description: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class ProjectWithRoleResponse(ProjectResponse):
+    """Project details response including caller's assigned role."""
+
+    role: str
+
+
+class MemberAddRequest(BaseModel):
+    """Payload for adding a member or updating their role."""
+
+    user_id: uuid.UUID = Field(..., description="Target user identifier")
+    role: str = Field(..., description="Assigned role: OWNER, ENGINEER, or VIEWER")
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, v: str) -> str:
+        valid_roles = {"OWNER", "ENGINEER", "VIEWER"}
+        upper = v.upper().strip()
+        if upper not in valid_roles:
+            raise ValueError(f"Role must be one of {valid_roles}")
+        return upper
+
+
+class MemberResponse(BaseModel):
+    """Response schema for project member records."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: uuid.UUID
+    email: str
+    full_name: str
+    role: str
+    joined_at: datetime

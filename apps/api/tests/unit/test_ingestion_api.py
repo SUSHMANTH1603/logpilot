@@ -78,7 +78,7 @@ async def test_full_ingestion_slice_with_source_key_auth(client: AsyncClient) ->
     assert ingest_res.status_code == 202
     ingest_data = ingest_res.json()
     run_id = ingest_data["ingestion_run_id"]
-    assert ingest_data["status"] == "COMPLETED"
+    assert ingest_data["status"] == "QUEUED"
     assert ingest_data["received_count"] == 1
 
     # 3. Verify IngestionRun and LogEvent persisted in database with secrets redacted

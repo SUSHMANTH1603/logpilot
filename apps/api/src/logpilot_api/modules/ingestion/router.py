@@ -2,7 +2,7 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from logpilot_api.api.deps import (
@@ -17,7 +17,10 @@ from logpilot_api.modules.ingestion.schemas import (
     LogSourceCreate,
     LogSourceResponse,
 )
-from logpilot_api.modules.ingestion.service import IngestionService
+from logpilot_api.modules.ingestion.service import (
+    IngestionService,
+    process_ingestion_job_background,
+)
 from logpilot_api.modules.projects.models import ProjectMembership
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["Log Ingestion"])
@@ -86,22 +89,34 @@ async def ingest_logs(
     project_id: uuid.UUID,
     log_source_id: uuid.UUID,
     payload: LogIngestRequest,
+    background_tasks: BackgroundTasks,
     x_logpilot_source_key: str | None = Header(default=None, alias="X-LogPilot-Source-Key"),
     authorization: str | None = Header(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> LogIngestResponse:
-    """Submit a batch of sanitized log lines for ingestion (D06 § 7.4)."""
+    """Submit a batch of sanitized log lines for ingestion (D06 § 7.4).
+
+    Returns HTTP 202 with status 'QUEUED'. In-process execution is dispatched via
+    FastAPI BackgroundTasks as an interim execution mechanism.
+    """
     service = IngestionService(session)
-    run, count = await service.ingest_batch(
+    run, count = await service.queue_ingestion_batch(
         project_id=project_id,
         log_source_id=log_source_id,
         payload=payload,
         source_key=x_logpilot_source_key,
         bearer_token=authorization,
     )
+    background_tasks.add_task(
+        process_ingestion_job_background,
+        project_id=project_id,
+        log_source_id=log_source_id,
+        run_id=run.id,
+        events_data=[e.model_dump() for e in payload.events],
+    )
     return LogIngestResponse(
         ingestion_run_id=run.id,
-        status=run.status,
+        status="QUEUED",
         received_count=count,
         enqueued_at=run.started_at,
     )

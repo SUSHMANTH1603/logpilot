@@ -106,14 +106,17 @@ class IngestionRepository:
         self,
         run: IngestionRun,
         status: str,
-        events_processed: int,
-        errors_count: int,
+        events_processed: int | None = None,
+        errors_count: int | None = None,
     ) -> IngestionRun:
         """Update ingestion run status, metrics, and completion timestamp."""
         run.status = status
-        run.events_processed = events_processed
-        run.errors_count = errors_count
-        run.completed_at = datetime.now(UTC)
+        if events_processed is not None:
+            run.events_processed = events_processed
+        if errors_count is not None:
+            run.errors_count = errors_count
+        if status in ("COMPLETED", "FAILED"):
+            run.completed_at = datetime.now(UTC)
         await self.session.flush()
         return run
 

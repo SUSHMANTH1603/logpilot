@@ -261,6 +261,11 @@ class LogEvent(Base):
             "timestamp",
             name="uq_log_events_dedup",
         ),
+        sa.UniqueConstraint(
+            "id",
+            "project_id",
+            name="uq_log_events_id_project_id",
+        ),
         sa.Index(
             "ix_log_events_project_timestamp",
             "project_id",

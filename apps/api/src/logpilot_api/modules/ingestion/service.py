@@ -132,7 +132,7 @@ class IngestionService:
             "Authentication required. Provide 'X-LogPilot-Source-Key' or 'Authorization: Bearer'."
         )
 
-    async def ingest_batch(
+    async def queue_ingestion_batch(
         self,
         project_id: uuid.UUID,
         log_source_id: uuid.UUID,
@@ -140,7 +140,7 @@ class IngestionService:
         source_key: str | None,
         bearer_token: str | None,
     ) -> tuple[IngestionRun, int]:
-        """Process and persist an ingestion batch conforming to D06 § 7.4 and D07."""
+        """Validate credentials and enqueue an ingestion run with status QUEUED (D06 § 7.4)."""
         source = await self.ingestion_repo.get_log_source(project_id, log_source_id)
         if not source:
             raise NotFoundError("Log source not found or does not belong to specified project.")
@@ -154,51 +154,125 @@ class IngestionService:
         if not payload.events:
             raise BadRequestError("Event batch cannot be empty.")
 
-        # Record ingestion run in STARTED state
+        # Record ingestion run in QUEUED state
         run = await self.ingestion_repo.create_ingestion_run(
-            log_source_id=log_source_id, status="STARTED"
+            log_source_id=log_source_id, status="QUEUED"
         )
+        await self.session.commit()
+        return run, len(payload.events)
 
-        now_utc = datetime.now(UTC)
-        normalized_events: list[LogEvent] = []
+    async def process_ingestion_job(
+        self,
+        project_id: uuid.UUID,
+        log_source_id: uuid.UUID,
+        run_id: uuid.UUID,
+        events_data: list[dict],
+    ) -> None:
+        """Process, normalize, persist events, and execute anomaly/incident pipeline hooks."""
+        run = await self.ingestion_repo.get_ingestion_run(project_id, run_id)
+        if not run:
+            return
 
-        for item in payload.events:
-            attrs = dict(item.attributes)
-            level, attrs = normalize_severity(item.level, attrs)
-            ts, attrs = normalize_timestamp(item.timestamp, attrs)
-            cleaned_message = redact_secrets(item.message)
-            cleaned_attrs = sanitize_attributes(attrs)
-            event_hash = compute_event_hash(project_id, log_source_id, ts, cleaned_message)
+        await self.ingestion_repo.update_ingestion_run(run=run, status="RUNNING")
 
-            event = LogEvent(
-                id=uuid.uuid4(),
+        try:
+            now_utc = datetime.now(UTC)
+            normalized_events: list[LogEvent] = []
+
+            for item in events_data:
+                attrs = dict(item.get("attributes", {}))
+                level, attrs = normalize_severity(item.get("level", "INFO"), attrs)
+                ts_val = item["timestamp"]
+                if isinstance(ts_val, str):
+                    ts_dt = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
+                else:
+                    ts_dt = ts_val
+                ts, attrs = normalize_timestamp(ts_dt, attrs)
+                cleaned_message = redact_secrets(item.get("message", ""))
+                cleaned_attrs = sanitize_attributes(attrs)
+                event_hash = compute_event_hash(project_id, log_source_id, ts, cleaned_message)
+
+                event = LogEvent(
+                    id=uuid.uuid4(),
+                    project_id=project_id,
+                    log_source_id=log_source_id,
+                    timestamp=ts,
+                    level=level,
+                    message_raw=cleaned_message,
+                    attributes=cleaned_attrs,
+                    event_hash=event_hash,
+                    ingested_at=now_utc,
+                )
+                normalized_events.append(event)
+
+            # Persist events with deduplication
+            persisted_count = await self.ingestion_repo.persist_events(
                 project_id=project_id,
                 log_source_id=log_source_id,
-                timestamp=ts,
-                level=level,
-                message_raw=cleaned_message,
-                attributes=cleaned_attrs,
-                event_hash=event_hash,
-                ingested_at=now_utc,
+                events=normalized_events,
             )
-            normalized_events.append(event)
 
-        # Persist events with deduplication
-        persisted_count = await self.ingestion_repo.persist_events(
+            # Pipeline Hook: Anomaly Detection & Incident Correlation
+            try:
+                from logpilot_api.modules.analysis.service import AnalysisService
+                from logpilot_api.modules.incidents.service import IncidentService
+
+                analysis_service = AnalysisService(self.session)
+                signal = await analysis_service.analyze_events(
+                    project_id=project_id,
+                    log_source_id=log_source_id,
+                    events=normalized_events,
+                )
+                if signal:
+                    incident_service = IncidentService(self.session)
+                    await incident_service.correlate_and_create(
+                        project_id=project_id,
+                        signal=signal,
+                        evidence_events=normalized_events,
+                    )
+            except Exception:
+                pass
+
+            # Update run to COMPLETED
+            await self.ingestion_repo.update_ingestion_run(
+                run=run,
+                status="COMPLETED",
+                events_processed=persisted_count,
+                errors_count=0,
+            )
+            await self.session.commit()
+        except Exception:
+            await self.ingestion_repo.update_ingestion_run(
+                run=run,
+                status="FAILED",
+                events_processed=0,
+                errors_count=len(events_data),
+            )
+            await self.session.commit()
+
+    async def ingest_batch(
+        self,
+        project_id: uuid.UUID,
+        log_source_id: uuid.UUID,
+        payload: LogIngestRequest,
+        source_key: str | None,
+        bearer_token: str | None,
+    ) -> tuple[IngestionRun, int]:
+        """Synchronously enqueue and process batch (interim compatibility helper)."""
+        run, count = await self.queue_ingestion_batch(
             project_id=project_id,
             log_source_id=log_source_id,
-            events=normalized_events,
+            payload=payload,
+            source_key=source_key,
+            bearer_token=bearer_token,
         )
-
-        # Update run to COMPLETED
-        await self.ingestion_repo.update_ingestion_run(
-            run=run,
-            status="COMPLETED",
-            events_processed=persisted_count,
-            errors_count=0,
+        await self.process_ingestion_job(
+            project_id=project_id,
+            log_source_id=log_source_id,
+            run_id=run.id,
+            events_data=[item.model_dump() for item in payload.events],
         )
-
-        return run, len(payload.events)
+        return run, count
 
     async def get_ingestion_run(
         self, project_id: uuid.UUID, ingestion_run_id: uuid.UUID
@@ -208,3 +282,27 @@ class IngestionService:
         if not run:
             raise NotFoundError("Ingestion run not found or does not belong to specified project.")
         return run
+
+
+async def process_ingestion_job_background(
+    project_id: uuid.UUID,
+    log_source_id: uuid.UUID,
+    run_id: uuid.UUID,
+    events_data: list[dict],
+) -> None:
+    """Interim background worker executing ingestion job via FastAPI BackgroundTasks.
+
+    NOTE: In-process background execution is not a durable distributed queue and may lose pending
+    work if the API process terminates. Distributed worker integration remains TBD.
+    """
+    from logpilot_api.db import session as db_session
+
+    session_factory = db_session.get_async_sessionmaker()
+    async with session_factory() as session:
+        service = IngestionService(session)
+        await service.process_ingestion_job(
+            project_id=project_id,
+            log_source_id=log_source_id,
+            run_id=run_id,
+            events_data=events_data,
+        )

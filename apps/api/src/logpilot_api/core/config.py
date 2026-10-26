@@ -84,6 +84,32 @@ class Settings(BaseSettings):
         description="Allowed CORS origin domains",
     )
 
+    # Phase 4: Anomaly Detection & Incident Configuration (Approved Defaults)
+    analysis_window_duration_seconds: int = Field(
+        default=300,
+        description="Tumbling window duration in seconds (default: 5m / 300s)",
+    )
+    analysis_warmup_windows: int = Field(
+        default=10,
+        description="Historical windows required for warm-up before statistical/ML scoring",
+    )
+    analysis_z_score_threshold: float = Field(
+        default=3.0,
+        description="Z-score anomaly threshold (standard deviations, default: 3.0)",
+    )
+    analysis_isolation_forest_contamination: float = Field(
+        default=0.01,
+        description="Contamination factor for Isolation Forest (default: 0.01)",
+    )
+    incident_correlation_window_seconds: int = Field(
+        default=600,
+        description="Incident temporal correlation window in seconds (default: 10m / 600s)",
+    )
+    incident_trigger_score: float = Field(
+        default=0.7,
+        description="Minimum anomaly confidence score to trigger an incident (default: 0.7)",
+    )
+
     @field_validator("app_env")
     @classmethod
     def validate_app_env(cls, v: str) -> str:
@@ -149,3 +175,6 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Return cached application settings singleton."""
     return Settings()
+
+
+settings = get_settings()
